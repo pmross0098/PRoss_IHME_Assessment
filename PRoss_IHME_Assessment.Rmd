@@ -27,49 +27,12 @@ knitr::opts_chunk$set(echo = FALSE,
         cache = TRUE,
         results='asis',
         fig.pos = "H")
-library(geoR)
-library(splines)
-library(stats)
-library(gstat)
-library(splancs)
 library(tidyverse)
-library(sp)
 library(sf)
 library(tmap)
 library(tmaptools)
-library(RColorBrewer)
 library(gridExtra)
-library(ggpubr)
-library(ggformula)
 library(viridis)
-
-# Function to cleanly expand a bounding box or raster extent
-exp_bbox <- function(bb, 
-                    perc = c(0.1,0.1,0.1,0.1), #bottom, left, top, right 
-                    rnd = 1000) {
-  if (class(bb)[1] == "Extent") { # Extent of RasterLayer
-    xrng.adj.l <- (bb@xmax-bb@xmin) * perc[2]
-    xrng.adj.r <- (bb@xmax-bb@xmin) * perc[4]
-    yrng.adj.b <- (bb@ymax-bb@ymin) * perc[1]
-    yrng.adj.t <- (bb@ymax-bb@ymin) * perc[3]
-    out_ext <- extent(floor((bb@xmin-xrng.adj.l)/rnd)*rnd,
-                      ceiling((bb@xmax+xrng.adj.r)/rnd)*rnd,
-                      floor((bb@ymin-yrng.adj.b)/rnd)*rnd,
-                      ceiling((bb@ymax+yrng.adj.t)/rnd)*rnd)
-  } else if (class(bb) == "bbox") {    # sf spatial object
-    out_ext <- in_box <- st_bbox(bb)
-    xrng.adj.l <- (in_box[['xmax']]-in_box[['xmin']]) * perc[2]
-    xrng.adj.r <- (in_box[['xmax']]-in_box[['xmin']]) * perc[4]
-    yrng.adj.b <- (in_box[['ymax']]-in_box[['ymin']]) * perc[1]
-    yrng.adj.t <- (in_box[['ymax']]-in_box[['ymin']]) * perc[3]
-    out_ext[['xmin']] <- floor((in_box[['xmin']]-xrng.adj.l)/rnd)*rnd
-    out_ext[['xmax']] <- floor((in_box[['xmax']]+xrng.adj.r)/rnd)*rnd
-    out_ext[['ymin']] <- floor((in_box[['ymin']]-yrng.adj.b)/rnd)*rnd
-    out_ext[['ymax']] <- floor((in_box[['ymax']]+yrng.adj.t)/rnd)*rnd
-  }
-  return(out_ext)
-}
-
 
 ```
 
