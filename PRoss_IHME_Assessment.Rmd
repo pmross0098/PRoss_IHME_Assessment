@@ -1,0 +1,323 @@
+---
+title: "IHME Assessment: Early COVID-19 Data"
+subtitle: "Research Scientist, Tobacco Metrics"
+author: Paul (Marty) Ross
+contact: p.martin.ross@gmail.com
+package: sf, tidyverse, tmap
+date: "May 31, 2023"
+output: 
+  pdf_document:
+    keep_tex: true
+    latex_engine: pdflatex
+    fig_caption: yes
+    highlight: haddock
+    number_sections: yes
+    toc: false
+    toc_depth: 2
+    citation_package: natbib
+editor_options: 
+    chunk_output_type: inline
+always_allow_html: true
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+        message = FALSE,
+        collapse = FALSE,
+        warning = FALSE,
+        cache = TRUE,
+        results='asis',
+        fig.pos = "H")
+library(geoR)
+library(splines)
+library(stats)
+library(gstat)
+library(splancs)
+library(tidyverse)
+library(sp)
+library(sf)
+library(tmap)
+library(tmaptools)
+library(RColorBrewer)
+library(gridExtra)
+library(ggpubr)
+library(ggformula)
+library(viridis)
+
+# Function to cleanly expand a bounding box or raster extent
+exp_bbox <- function(bb, 
+                    perc = c(0.1,0.1,0.1,0.1), #bottom, left, top, right 
+                    rnd = 1000) {
+  if (class(bb)[1] == "Extent") { # Extent of RasterLayer
+    xrng.adj.l <- (bb@xmax-bb@xmin) * perc[2]
+    xrng.adj.r <- (bb@xmax-bb@xmin) * perc[4]
+    yrng.adj.b <- (bb@ymax-bb@ymin) * perc[1]
+    yrng.adj.t <- (bb@ymax-bb@ymin) * perc[3]
+    out_ext <- extent(floor((bb@xmin-xrng.adj.l)/rnd)*rnd,
+                      ceiling((bb@xmax+xrng.adj.r)/rnd)*rnd,
+                      floor((bb@ymin-yrng.adj.b)/rnd)*rnd,
+                      ceiling((bb@ymax+yrng.adj.t)/rnd)*rnd)
+  } else if (class(bb) == "bbox") {    # sf spatial object
+    out_ext <- in_box <- st_bbox(bb)
+    xrng.adj.l <- (in_box[['xmax']]-in_box[['xmin']]) * perc[2]
+    xrng.adj.r <- (in_box[['xmax']]-in_box[['xmin']]) * perc[4]
+    yrng.adj.b <- (in_box[['ymax']]-in_box[['ymin']]) * perc[1]
+    yrng.adj.t <- (in_box[['ymax']]-in_box[['ymin']]) * perc[3]
+    out_ext[['xmin']] <- floor((in_box[['xmin']]-xrng.adj.l)/rnd)*rnd
+    out_ext[['xmax']] <- floor((in_box[['xmax']]+xrng.adj.r)/rnd)*rnd
+    out_ext[['ymin']] <- floor((in_box[['ymin']]-yrng.adj.b)/rnd)*rnd
+    out_ext[['ymax']] <- floor((in_box[['ymax']]+yrng.adj.t)/rnd)*rnd
+  }
+  return(out_ext)
+}
+
+
+```
+
+```{r loaddata}
+dat_dir <- "Data"
+
+cov_df <- read.csv(file.path(dat_dir, "covid_data_cases_deaths_hosp.csv"))
+
+# Clean up, set 
+cov_df <- cov_df %>%
+  filter(!Province.State == "") %>%
+  mutate(Date = as.Date(Date, origin = "1899-12-30"))
+
+```
+
+\newpage
+
+# Cases, Hospitalizations, Deaths
+
+## What is the relationship between cases, hospitalizations, and deaths? Describe how these indicators relate to each other, and visualize the relationships in at least 2 different ways.
+
+During the COVID-19 pandemic, we saw cases, hospitalizations, and deaths rise in a temporally lagged relationship. In the _very_ early stages of the pandemic, diagnostic tests for the novel SARS-CoV2 virus were in far too short supply to correctly enumerate the cases, and resulting hospitalizations and deaths. But when testing was widely available, the pattern observed during periods of surging cases was a roughly 2-week lag between upticks in cases and hospitalizations, then an additional 2-week lag before an uptick in deaths.
+
+While not apparent in raw count space, in log space the difference between the cumulative death and cumulative case lines reflect the estimated 5% crude case fatality rate (CFR) of the original strain (~4-log difference). 
+
+Also interesting is the noisiness of the hospitalization data near the end of the plot, reflecting the reporting lag for the metric. As the hospitalization data is incomplete due to different legal obligations by state, we see lower levels of reported hospitalization than actually occurred. It lies near the level of deaths, where it should actually lie solidly between the cases and deaths.
+
+```{r covplot, fig.dim=c(7.5,6.5)}
+# Simple summarization of data, treat missing data as 0 for the purposes of 
+# cumulative summing
+vis_df <- cov_df %>%
+  group_by(Date) %>%
+  summarize(Cases = sum(Confirmed, na.rm = TRUE),
+            Hospitalizations = sum(Hospitalizations, na.rm = TRUE),
+            Deaths = sum(Deaths, na.rm = TRUE)) %>%
+  gather(key = "Measure", value = "Cumulative", -Date)
+
+pl_raw <- ggplot(vis_df, aes(x=Date, y=Cumulative, color=Measure)) +
+  geom_line(size = 1.2) +
+  scale_x_date(date_labels = "%b %Y",date_breaks = "1 month") +
+  scale_y_continuous(labels = scales::comma) +
+  theme_bw() +
+  labs(title = "Early US COVID-19 Metrics, Raw Data",
+       subtitle = "January - August 2020",
+       y = "Cumulative Sum") +
+  theme(legend.title = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5))
+  
+pl_log <- ggplot(vis_df, aes(x=Date, y=Cumulative, color=Measure)) +
+  geom_line(size = 1.2) +
+  scale_x_date(date_labels = "%b %Y",date_breaks = "1 month") +
+  scale_y_continuous(trans = log2_trans(),
+                     breaks = trans_breaks("log2", function(x) 2^x),
+                     labels = trans_format("log2", function(x) scales::comma(2^x))) + 
+  theme_bw() +
+  labs(title = "Early US COVID-19 Metrics, Log2 Scaled",
+       subtitle = "January - August 2020",
+       y = "Cumulative Sum") +
+  theme(legend.title = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5))
+
+grid.arrange(pl_raw, pl_log, nrow = 2)
+
+```
+
+\newpage
+
+A useful way to visualize the CFR across this dataset is by state in a chloropleth map. Of course this is a rough metric, and given the structural independence of health departments, divergent testing regimens, population densities, earlier geographic entry points, and differing levels of co-morbidities by state (smoking, obesity, etc.), we see a wide variety of CFR's, which in aggregate yield a ~5% crude CFR nationally. This figure is inflated due to undertesting, but as a crude measure it is useful for exploratory analysis.
+
+``` {r mapcfr}
+# Read in shape file, 
+US_shp <- read_sf(file.path(dat_dir, "cb_2018_us_state_20m.shp")) %>%
+  st_transform(crs = 2163)
+US_shp <- US_shp[!US_shp$NAME %in% c("Hawaii","Alaska","Puerto Rico"),]
+
+# Calculate CFR by state, merge to shapefile
+st_df <- cov_df %>%
+  group_by(Province.State) %>%
+  summarize(Cases = max(Confirmed, na.rm = TRUE),
+            Deaths = max(Deaths, na.rm = TRUE)) %>%
+  mutate(CFR = Deaths/Cases)
+US_shp$CFR <- st_df$CFR[match(US_shp$NAME, st_df$Province.State)]
+
+# tmap
+tm_shape(US_shp) + 
+    tm_fill(col = "CFR", alpha = 1, palette = "viridis", n=6, title = "Crude\nCFR") + 
+    tm_borders(col = "gray15", lwd = 1.2) + 
+  tm_compass(type = "4star",
+             position = c(0.03, 0.03),
+             show.labels = 2,
+             size = 2.5,
+             text.size = 0.8) +
+  tm_scale_bar(text.size = 0.8,
+               position = c(0.175, 0.02),
+               breaks = c(0,250,500,1000)) +
+  tm_layout(main.title = "Rough CFR in the Lower 48 States\nJan-Aug 2020",
+            main.title.position = 0,
+            main.title.size = 1,
+            legend.outside = TRUE,
+            legend.bg.color = "white",
+            legend.frame = TRUE,
+            frame = FALSE)
+
+
+```
+
+\newpage
+
+# Fit Daily Death Metric
+
+## Fit a curve of daily deaths, utilizing these inputs. Describe the approach you used and visualize the results.
+
+This was a challenge to ensure the daily death totals were accurate, requiring imputing data for missing days with the cumulative total of the previous day. I fit the daily deaths using a $5^{th}$ degree polynomial in a linear model using `lm`, allowing adequate degrees of freedom to get a tight fit to the data and capture the local mins and maxes of the first wave and beginning of second wave of the pandemic. Additionally, I constrained the model to begin on March $21^{st}$ to ignore the low-count space and poor testing capacity of the early pandemic.
+
+The model performs well, falling between the cycling high and low values, which reflect the weekend reporting lag that happened in many jurisdictions.
+
+``` {r dailydth, fig.dim=c(6,4)}
+# Fill missing data, state-wise
+cov_df <- read.csv(file.path(dat_dir, "covid_data_cases_deaths_hosp.csv")) %>%
+  filter(!Province.State == "") %>%
+  dplyr::arrange(Date)
+# cov_df$str.Date <- as.character(cov_df$Date) #convert to char for simplicity
+cmsm_df <- data.frame(matrix(nrow = 0, ncol = 3))
+for (dt in unique(cov_df$Date)) {
+  for (st in unique(cov_df$Province.State)) {
+    tmp_df <- cov_df %>%
+      filter(Date == dt & Province.State == st)
+    if (nrow(tmp_df) == 0) {
+      cmsm_df <- rbind(cmsm_df, c(dt, st, 0))
+    } else {
+      cmsm_df <- rbind(cmsm_df, c(tmp_df$Date, tmp_df$Province.State, 
+                                  as.numeric(tmp_df$Deaths)))
+    }
+  }
+}
+
+# Mid-stage clean-up, replace NA's with 0, Date as data object, 
+# Cumulative deaths as numeric
+colnames(cmsm_df) <- c("Date", "State", "CmDths")
+cmsm_df$CmDths[is.na(cmsm_df$CmDths)] <- 0
+cmsm_df <- cmsm_df %>%
+  mutate(Date = as.Date(as.numeric(cmsm_df$Date), origin = "1899-12-30"),
+         CmDths = as.numeric(CmDths))
+
+# Need to impute missing days, as gaps throw off calculations
+dy.dth_df <- data.frame(matrix(nrow = 0, ncol = 4))
+for (st in unique(cmsm_df$State)) {
+  tmp_df <- cmsm_df %>%
+    filter(State == st)
+  for (i in seq(2,nrow(tmp_df))) {
+    tmp_df[i, "CmDths"] <- ifelse(tmp_df[i, "CmDths"] == 0, 
+                                  tmp_df[i, "CmDths"] <- tmp_df[i-1, "CmDths"],
+                                  tmp_df[i, "CmDths"])
+  }
+  tmp_df <- tmp_df %>%
+    mutate(Daily.Deaths = c(CmDths[1], diff(CmDths)))
+  dy.dth_df <- rbind(dy.dth_df, tmp_df)
+}
+
+# Accumulate across states by dates
+dy.dth_df <- dy.dth_df %>%
+  group_by(Date) %>%
+  summarize(Daily.Deaths = sum(Daily.Deaths),
+            Clr = "Observed")
+
+# Filter fit to just rapid uptick in deaths, 2020-03-20
+dy.dth_df.fit <- dy.dth_df[dy.dth_df$Date > "2020-03-20",]
+mod.poly <- lm(Daily.Deaths ~ poly(Date, 5), data = dy.dth_df.fit)
+
+# Visualize Curve
+ggplot(dy.dth_df, aes(x = Date, y = Daily.Deaths, color = Clr)) +
+  geom_point(color="gray35") +
+  stat_smooth(method = "lm", color = "blue",
+              formula = y ~ poly(x, 5),
+              geom = "smooth",
+              data = dy.dth_df.fit) +
+  scale_color_manual(name = "Daily Deaths") +
+  xlim(c(min(dy.dth_df$Date), max(dy.dth_df$Date)+28)) +
+  scale_x_date(date_labels = "%b %Y",date_breaks = "1 month") +
+  theme_bw() +
+  labs(title = "Daily Deaths from COVID-19 Infection",
+       subtitle = "January - August 2020",
+       y = "Cumulative Sum") +
+  theme(legend.title = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5))
+
+```
+
+\newpage
+
+# 14-day Model Projection
+
+## Create projections for 14-days after the last observed data point. Visualize the result. Describe the benefits and limitations of your approach. Where do you think this approach has performed particularly well? What types of situations cause your model to struggle?
+
+Overall, I trust the projections of this model to perform well over the course of the following 14-days, as the dataset ends at a period of rapid, near-logarithmic increase. We would expect the daily deaths to increase at something like this rate.
+
+Some limitations of the $5^{th}$ degree polynomial are that it is likely over-fitting data that we know to be incomplete. Even bounding the model from March $21^{st}$ includes a large amount of early data where broadly available testing was still coming online. The literature on the subject points to a significant undercount of cases and deaths due to COVID-19 at this stage.
+
+Additionally, using the polynomial fit would do a poor job of fitting at other stages of COVID-19 case surges, such as predicting a peak and downturn of daily deaths.
+
+``` {r regfit, fig.dim=c(6,4)}
+
+# Create projected values dataframe
+pred.val14 <- data.frame(Date = seq.Date(max(dy.dth_df$Date)+1, 
+                                         max(dy.dth_df$Date)+14, 1))
+pred.val14$Projected.Deaths <- predict(mod.poly, pred.val14)
+pred.val14$Clr <- "Projected"
+
+cols <- c("Observed"="gray35","Projected"="hotpink")
+# Visualize Curve, adding projections
+ggplot(dy.dth_df, aes(x = Date, y = Daily.Deaths, color = Clr)) +
+  geom_point() +
+  stat_smooth(method = "lm", color = "blue",
+              formula = y ~ poly(x, 5),
+              geom = "smooth",
+              data = dy.dth_df.fit) +
+  geom_point(data = pred.val14, aes(x = Date, y = Projected.Deaths, color = Clr)) +
+  scale_color_manual(name = "Daily Deaths", values = cols) +
+  xlim(c(min(dy.dth_df$Date), max(dy.dth_df$Date)+28)) +
+  scale_x_date(date_labels = "%b %Y",date_breaks = "1 month") +
+  theme_bw() +
+  labs(title = "Daily Deaths from COVID-19 Infection",
+       subtitle = "January - August 2020",
+       y = "Cumulative Sum") +
+  theme(legend.title = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5))
+
+```
+
+\newpage
+
+# Follow-up
+
+## Lastly, describe future areas of exploration or improvement for your approach. If you had more time, what would you do next?
+
+As I really enjoy incorporating geospatial approaches to public health problems, I would love to do a few things.
+
+1. Build a spatial regression, incorporating demographic (race, SES), behavioral (tobacco use) and environmental (air quality) data to identify significant risk factors and covariates that yield the differences observed in crude CFR state-by-state.
+2. As I have population data, I would like to create a companion chloropleth map of relative risk by state, using the cumulative case total to estimate expected deaths by population. This would very simply visualize where we see higher rates of death normalized per capita.
+3. I'd love to build a quick Shiny app, as I think such approaches are powerful narrative tools for education, insight, and discovery. This is similar to my recently completed wildfire-oriented Master's capstone.
+
+`r paste0("  [{Click for Wildfire Smoke App}](https://pmross0098.shinyapps.io/MRoss_SmkDaysWA/)")`
+
+Thanks for this opportunity!
+- Paul (Marty)
+
+
